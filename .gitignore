@@ -1,0 +1,4 @@
+node_modules/
+.bugs-profile/
+playwright-report/
+test-results/
