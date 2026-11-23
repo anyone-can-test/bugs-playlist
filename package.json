@@ -1,0 +1,13 @@
+{
+  "name": "bugs-playlist",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Create a Bugs Music playlist with Playwright",
+  "scripts": {
+    "start": "node bugs-playlist.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.56.1"
+  }
+}
