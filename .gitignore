@@ -2,3 +2,6 @@ node_modules/
 .bugs-profile/
 playwright-report/
 test-results/
+
+# Personal run settings (use the committed .example.json as a template)
+bugs-playlist.config.json
