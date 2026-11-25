@@ -5,7 +5,8 @@
   "type": "module",
   "description": "Create a Bugs Music playlist with Playwright",
   "scripts": {
-    "start": "node bugs-playlist.mjs"
+    "start": "node bugs-playlist.mjs",
+    "preview": "node bugs-playlist.mjs --config bugs-playlist.config.example.json --dry-run"
   },
   "dependencies": {
     "playwright": "^1.56.1"
