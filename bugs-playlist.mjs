@@ -108,6 +108,8 @@ export async function createPlaylist(page, title, { dryRun = false } = {}) {
   if (!title || title.length > 100) {
     throw new Error('제목은 공백을 제외하고 1~100자여야 합니다.');
   }
+  // Fail closed: preview never opens or submits the Bugs create form.
+  if (dryRun) return { status: 'dry-run', title };
   await page.goto(BUGS_LIBRARY_URL, { waitUntil: 'domcontentloaded' });
   const create = page.getByRole('link', { name: '새로 만들기', exact: true });
   console.log('로그인이 필요하면 열린 브라우저에서 로그인해 주세요.');
@@ -154,7 +156,7 @@ export async function createPlaylist(page, title, { dryRun = false } = {}) {
   }
 }
 
-async function findBugsTrack(page, song) {
+async function findBugsTrack(page, song, { dryRun = false } = {}) {
   const artist = normalizeArtist(song.artist);
   const query = [song.title, song.artist.replace(/^\s*ost\s*[/|-]\s*/i, '')]
     .filter(Boolean).join(' ');
@@ -187,6 +189,7 @@ async function findBugsTrack(page, song) {
   }
   // MBC는 녹음/리마스터 버전을 구분하지 않으므로 Bugs 상위 검색 결과를 우선합니다.
   const selected = candidates[0];
+  if (dryRun) return { status: 'dry-run', song, selected: selected.label };
   const row = page.locator('table tr').nth(selected.index);
   await row.getByRole('link', { name: '내 앨범에 담기', exact: true }).click();
   const playlist = page.getByRole('link', { name: song.playlistTitle, exact: true });
@@ -195,10 +198,10 @@ async function findBugsTrack(page, song) {
   return { status: 'added', song, alternatives: candidates.length };
 }
 
-async function addBroadcastTracks(page, broadcast, playlistTitle) {
+async function addBroadcastTracks(page, broadcast, playlistTitle, { dryRun = false } = {}) {
   const results = [];
   for (const track of broadcast.tracks) {
-    results.push(await findBugsTrack(page, { ...track, playlistTitle }));
+    results.push(await findBugsTrack(page, { ...track, playlistTitle }, { dryRun }));
   }
   return {
     added: results.filter(result => result.status === 'added').length,
@@ -226,7 +229,7 @@ async function createRangePlaylist(page, broadcasts, title, { dryRun = false } =
   for (const track of tracks) {
     results.push({
       date: track.date,
-      ...(await findBugsTrack(page, { ...track, playlistTitle: title })),
+      ...(await findBugsTrack(page, { ...track, playlistTitle: title }, { dryRun })),
     });
   }
   return {
@@ -334,6 +337,7 @@ async function main() {
     throw new Error('--config과 위치 인자 플레이리스트 제목은 함께 사용할 수 없습니다.');
   }
   const options = await loadRunOptions(cliOptions);
+  console.log(options.dryRun ? '실행 모드: 미리보기 (Bugs 변경 없음)' : '실행 모드: 실제 반영');
   const dateMode = options.date !== undefined || options.from !== undefined || options.to !== undefined;
   if (dateMode && positional.length) {
     throw new Error('날짜 옵션과 플레이리스트 제목은 함께 사용할 수 없습니다.');
