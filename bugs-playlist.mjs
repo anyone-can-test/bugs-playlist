@@ -1,18 +1,20 @@
 /**
- * Node.js + Playwright: Bugs 내 앨범 생성 및 배철수 음악캠프 일별 선곡 담기.
+ * Node.js + Playwright: Bugs 내 앨범 생성 및 MBC 라디오 프로그램별 선곡 담기.
  *
  * 설치: npm install && npx playwright install chromium
  * 빈 앨범: npm start -- "출근길 음악"
  * 한 날짜 선곡: npm start -- --date 2026-11-22
  * 날짜별 목록: npm start -- --from 2026-11-20 --to 2026-11-22
  * 기간 단일 목록: npm start -- --from 2026-11-20 --to 2026-11-22 --playlist-title "배캠 모음"
- * 미리보기: npm start -- --date 2026-11-22 --dry-run
+ * 미리보기: npm run preview
+ * 설정 파일: npm start -- --config bugs-playlist.config.json
  *
  * 최초 실행 시 열린 브라우저에서 직접 Bugs에 로그인하세요(최대 5분).
  * 전용 .bugs-profile에 세션을 보관합니다. Git/공유 대상에서 제외하세요.
  * MBC 선곡과 일치하는 Bugs 곡을 찾지 못하면 건너뛰고 결과에 표시합니다.
  */
 import { chromium } from 'playwright';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -20,7 +22,7 @@ const BUGS_LIBRARY_URL = 'https://music.bugs.co.kr/user/library/myalbum/list';
 const BUGS_SEARCH_URL = 'https://music.bugs.co.kr/search/integrated';
 const MBC_INDEX_URL = 'https://miniweb.imbc.com/Music/Index';
 const MBC_BASE_URL = 'https://miniweb.imbc.com';
-const MBC_PROGRAM_CODE = 'RAMFM300'; // 배철수의 음악캠프
+const DEFAULT_PROGRAM = { code: 'RAMFM300', name: '배철수 음악캠프' };
 
 function normalize(value) {
   return String(value ?? '')
@@ -60,12 +62,12 @@ function dateRange(from, to) {
     new Date(start + i * 86_400_000).toISOString().slice(0, 10));
 }
 
-async function fetchBroadcasts(page, from, to) {
+async function fetchBroadcasts(page, from, to, programCode) {
   const indexByDate = new Map();
   const pagesToScan = 365;
   for (let pageNumber = 1; pageNumber <= pagesToScan; pageNumber += 1) {
     const indexUrl = MBC_INDEX_URL + '?page=' + pageNumber
-      + '&progCode=' + MBC_PROGRAM_CODE;
+      + '&progCode=' + programCode;
     await page.goto(indexUrl, { waitUntil: 'domcontentloaded' });
     const entries = await page.locator('table tr').evaluateAll(rows =>
       rows.slice(1).map(row => {
@@ -238,10 +240,10 @@ async function createRangePlaylist(page, broadcasts, title, { dryRun = false } =
   };
 }
 
-async function createDailyPlaylists(page, broadcasts, { dryRun = false } = {}) {
+async function createDailyPlaylists(page, broadcasts, programName, { dryRun = false } = {}) {
   const summary = [];
   for (const broadcast of broadcasts) {
-    const title = '배철수 음악캠프 ' + broadcast.date;
+    const title = programName + ' ' + broadcast.date;
     if (dryRun) {
       summary.push({ date: broadcast.date, title, tracks: broadcast.tracks.length, status: 'dry-run' });
       continue;
@@ -267,36 +269,81 @@ async function createDailyPlaylists(page, broadcasts, { dryRun = false } = {}) {
 
 function parseArgs(args) {
   const positional = [];
-  const options = { dryRun: false, date: null, from: null, to: null, playlistTitle: null };
+  const options = { configPath: null, dryRun: null, execute: false, date: null, from: null, to: null, playlistTitle: null, programCode: null, programName: null };
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
-    if (arg === '--dry-run') {
-      options.dryRun = true;
-    } else if (arg === '--date' || arg === '--from' || arg === '--to' || arg === '--playlist-title') {
+    if (arg === '--dry-run') options.dryRun = true;
+    else if (arg === '--execute') options.execute = true;
+    else if (arg === '--config' || arg === '--date' || arg === '--from' || arg === '--to'
+      || arg === '--playlist-title' || arg === '--program-code' || arg === '--program-name') {
       const value = args[++i];
-      if (!value || value.startsWith('--')) throw new Error(arg + ' 다음에 날짜를 입력하세요.');
-      options[arg === '--playlist-title' ? 'playlistTitle' : arg.slice(2)] = value;
+      if (!value || value.startsWith('--')) throw new Error(arg + ' 다음에 값을 입력하세요.');
+      if (arg === '--config') options.configPath = value;
+      else if (arg === '--playlist-title') options.playlistTitle = value;
+      else if (arg === '--program-code') options.programCode = value;
+      else if (arg === '--program-name') options.programName = value;
+      else options[arg.slice(2)] = value;
     } else if (arg.startsWith('--')) {
       throw new Error('알 수 없는 옵션: ' + arg);
-    } else {
-      positional.push(arg);
-    }
+    } else positional.push(arg);
   }
   return { positional, options };
 }
 
+async function loadRunOptions(cliOptions) {
+  let config = {};
+  if (cliOptions.configPath) {
+    const configFile = path.resolve(path.dirname(fileURLToPath(import.meta.url)), cliOptions.configPath);
+    try {
+      config = JSON.parse(await readFile(configFile, 'utf8'));
+    } catch (error) {
+      throw new Error('설정 파일을 읽을 수 없습니다: ' + configFile, { cause: error });
+    }
+    if (!config || Array.isArray(config) || typeof config !== 'object') {
+      throw new Error('설정 파일 최상위 값은 JSON 객체여야 합니다.');
+    }
+    const allowed = new Set(['programCode', 'programName', 'date', 'from', 'to', 'playlistTitle', 'dryRun']);
+    const unknown = Object.keys(config).filter(key => !allowed.has(key));
+    if (unknown.length) throw new Error('설정 파일에 알 수 없는 항목이 있습니다: ' + unknown.join(', '));
+  }
+  const options = {
+    programCode: DEFAULT_PROGRAM.code,
+    programName: DEFAULT_PROGRAM.name,
+    dryRun: cliOptions.configPath ? true : false,
+    ...config,
+  };
+  for (const key of ['date', 'from', 'to', 'playlistTitle', 'programCode', 'programName']) {
+    if (cliOptions[key] !== null) options[key] = cliOptions[key];
+  }
+  if (cliOptions.dryRun !== null) options.dryRun = cliOptions.dryRun;
+  if (cliOptions.execute) options.dryRun = false;
+  if (typeof options.dryRun !== 'boolean') throw new Error('dryRun은 true 또는 false여야 합니다.');
+  if (!/^[a-zA-Z0-9_-]{1,64}$/.test(options.programCode)) {
+    throw new Error('programCode는 영문자, 숫자, 밑줄, 하이픈으로 구성해야 합니다.');
+  }
+  if (typeof options.programName !== 'string' || !options.programName.trim() || options.programName.trim().length > 100) {
+    throw new Error('programName은 1~100자여야 합니다.');
+  }
+  options.programName = options.programName.trim();
+  return options;
+}
+
 async function main() {
-  const { positional, options } = parseArgs(process.argv.slice(2));
-  const dateMode = options.date !== null || options.from !== null || options.to !== null;
+  const { positional, options: cliOptions } = parseArgs(process.argv.slice(2));
+  if (cliOptions.configPath && positional.length) {
+    throw new Error('--config과 위치 인자 플레이리스트 제목은 함께 사용할 수 없습니다.');
+  }
+  const options = await loadRunOptions(cliOptions);
+  const dateMode = options.date !== undefined || options.from !== undefined || options.to !== undefined;
   if (dateMode && positional.length) {
     throw new Error('날짜 옵션과 플레이리스트 제목은 함께 사용할 수 없습니다.');
   }
-  if (!dateMode && (positional.length !== 1 || !positional[0].trim()
+  if (!dateMode && !cliOptions.configPath && (positional.length !== 1 || !positional[0].trim()
     || positional[0].trim().length > 100)) {
     throw new Error('사용법: npm start -- "플레이리스트 제목" [--dry-run]');
   }
-  if (options.date && (options.from || options.to || options.playlistTitle)) {
-    throw new Error('--date는 --from/--to/--playlist-title과 함께 사용할 수 없습니다.');
+  if (options.date && (options.from || options.to)) {
+    throw new Error('--date와 --from/--to는 함께 사용할 수 없습니다.');
   }
   if (options.playlistTitle && (!options.from || !options.to)) {
     throw new Error('--playlist-title은 --from과 --to 범위에서만 사용할 수 있습니다.');
@@ -304,27 +351,25 @@ async function main() {
   if (dateMode && !options.date && (!options.from || !options.to)) {
     throw new Error('날짜 범위에는 --from과 --to가 모두 필요합니다.');
   }
+  if (!dateMode && cliOptions.configPath) throw new Error('설정에 date 또는 from과 to를 입력하세요.');
 
   const profile = path.join(path.dirname(fileURLToPath(import.meta.url)), '.bugs-profile');
   const context = await chromium.launchPersistentContext(profile, { headless: false });
   try {
     const page = context.pages()[0] ?? await context.newPage();
     page.setDefaultTimeout(15_000);
+    if (!dateMode) {
+      console.log(await createPlaylist(page, positional[0], { dryRun: options.dryRun }));
+      return;
+    }
     page.on('dialog', async dialog => {
       console.log('[' + dialog.type() + '] ' + dialog.message());
       if (dialog.type() === 'alert') await dialog.accept();
       else await dialog.dismiss();
     });
 
-    if (!dateMode) {
-      console.log(await createPlaylist(page, positional[0], { dryRun: options.dryRun }));
-      return;
-    }
-
-    const dates = options.date
-      ? [validateDate(options.date)]
-      : dateRange(options.from, options.to);
-    const broadcasts = await fetchBroadcasts(page, dates[0], dates[dates.length - 1]);
+    const dates = options.date ? [validateDate(options.date)] : dateRange(options.from, options.to);
+    const broadcasts = await fetchBroadcasts(page, dates[0], dates[dates.length - 1], options.programCode);
     const byDate = new Map(broadcasts.map(item => [item.date, item]));
     for (const date of dates) {
       if (!byDate.has(date)) console.log({ date, status: 'no-broadcast-found' });
@@ -332,16 +377,17 @@ async function main() {
     if (options.playlistTitle && broadcasts.length === 0) {
       throw new Error('기간 내 방송 선곡을 찾지 못했습니다.');
     }
-    if (options.playlistTitle) {
-      console.log(await createRangePlaylist(page, broadcasts, options.playlistTitle, { dryRun: options.dryRun }));
-      return;
-    }
     if (options.dryRun) {
-      console.log(await createDailyPlaylists(page, broadcasts, { dryRun: true }));
+      if (options.playlistTitle) {
+        console.log(await createRangePlaylist(page, broadcasts, options.playlistTitle, { dryRun: true }));
+      } else {
+        console.log(await createDailyPlaylists(page, broadcasts, options.programName, { dryRun: true }));
+      }
       return;
     }
     console.log('MBC 선곡표를 확인했습니다. Bugs 로그인이 필요하면 열린 브라우저에서 로그인해 주세요.');
-    console.log(await createDailyPlaylists(page, broadcasts));
+    if (options.playlistTitle) console.log(await createRangePlaylist(page, broadcasts, options.playlistTitle));
+    else console.log(await createDailyPlaylists(page, broadcasts, options.programName));
   } finally {
     await context.close();
   }
