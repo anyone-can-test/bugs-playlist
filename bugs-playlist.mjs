@@ -272,17 +272,18 @@ async function createDailyPlaylists(page, broadcasts, programName, { dryRun = fa
 
 function parseArgs(args) {
   const positional = [];
-  const options = { configPath: null, dryRun: null, execute: false, date: null, from: null, to: null, playlistTitle: null, programCode: null, programName: null };
+  const options = { configPath: null, dryRun: null, execute: false, date: null, from: null, to: null, playlistTitle: null, program: null, programCode: null, programName: null };
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === '--dry-run') options.dryRun = true;
     else if (arg === '--execute') options.execute = true;
     else if (arg === '--config' || arg === '--date' || arg === '--from' || arg === '--to'
-      || arg === '--playlist-title' || arg === '--program-code' || arg === '--program-name') {
+      || arg === '--playlist-title' || arg === '--program' || arg === '--program-code' || arg === '--program-name') {
       const value = args[++i];
       if (!value || value.startsWith('--')) throw new Error(arg + ' 다음에 값을 입력하세요.');
       if (arg === '--config') options.configPath = value;
       else if (arg === '--playlist-title') options.playlistTitle = value;
+      else if (arg === '--program') options.program = value;
       else if (arg === '--program-code') options.programCode = value;
       else if (arg === '--program-name') options.programName = value;
       else options[arg.slice(2)] = value;
@@ -305,7 +306,7 @@ async function loadRunOptions(cliOptions) {
     if (!config || Array.isArray(config) || typeof config !== 'object') {
       throw new Error('설정 파일 최상위 값은 JSON 객체여야 합니다.');
     }
-    const allowed = new Set(['programCode', 'programName', 'date', 'from', 'to', 'playlistTitle', 'dryRun']);
+    const allowed = new Set(['program', 'programCode', 'programName', 'date', 'from', 'to', 'playlistTitle', 'dryRun']);
     const unknown = Object.keys(config).filter(key => !allowed.has(key));
     if (unknown.length) throw new Error('설정 파일에 알 수 없는 항목이 있습니다: ' + unknown.join(', '));
   }
@@ -315,8 +316,41 @@ async function loadRunOptions(cliOptions) {
     dryRun: cliOptions.configPath ? true : false,
     ...config,
   };
-  for (const key of ['date', 'from', 'to', 'playlistTitle', 'programCode', 'programName']) {
+  for (const key of ['date', 'from', 'to', 'playlistTitle', 'program', 'programCode', 'programName']) {
     if (cliOptions[key] !== null) options[key] = cliOptions[key];
+  }
+  const catalogPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'programs.json');
+  let catalog;
+  try {
+    catalog = JSON.parse(await readFile(catalogPath, 'utf8'));
+  } catch (error) {
+    throw new Error('프로그램 목록을 읽을 수 없습니다: ' + catalogPath, { cause: error });
+  }
+  if (!Array.isArray(catalog.programs)) {
+    throw new Error('programs.json에는 programs 배열이 필요합니다.');
+  }
+  const lookup = value => {
+    const key = String(value ?? '').trim().toLocaleLowerCase();
+    if (!key) return null;
+    return catalog.programs.find(item =>
+      [item.id, item.name, ...(Array.isArray(item.aliases) ? item.aliases : [])]
+        .some(alias => String(alias ?? '').trim().toLocaleLowerCase() === key),
+    ) ?? null;
+  };
+  const chosenProgram = options.program ? lookup(options.program) : lookup(options.programName);
+  if (options.program && !chosenProgram) {
+    throw new Error('등록되지 않은 프로그램입니다. programs.json의 id, 이름 또는 별칭을 사용하세요: ' + options.program);
+  }
+  const explicitCode = Object.hasOwn(config, 'programCode') || cliOptions.programCode !== null;
+  const explicitName = Object.hasOwn(config, 'programName') || cliOptions.programName !== null;
+  if (chosenProgram) {
+    if (typeof chosenProgram.programCode !== 'string' || !chosenProgram.programCode.trim()) {
+      throw new Error('programs.json 항목에 programCode가 없습니다: ' + chosenProgram.name);
+    }
+    if (!explicitCode) options.programCode = chosenProgram.programCode;
+    if (options.program && !explicitName) options.programName = chosenProgram.name;
+  } else if (explicitName && !explicitCode) {
+    throw new Error('등록되지 않은 programName입니다. programs.json에 프로그램을 추가하거나 programCode를 지정하세요: ' + options.programName);
   }
   if (cliOptions.dryRun !== null) options.dryRun = cliOptions.dryRun;
   if (cliOptions.execute) options.dryRun = false;
