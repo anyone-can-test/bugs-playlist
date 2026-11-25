@@ -1,0 +1,28 @@
+{
+  "programs": [
+    {
+      "id": "baechul-camp",
+      "name": "배철수 음악캠프",
+      "programCode": "RAMFM300",
+      "aliases": ["배철수의 음악캠프", "배캠"]
+    },
+    {
+      "id": "perfect-day",
+      "name": "완벽한 하루 이상순입니다",
+      "programCode": "FM4U000001364",
+      "aliases": ["완벽한 하루", "이상순"]
+    },
+    {
+      "id": "today-morning-yoon",
+      "name": "오늘아침 윤상입니다",
+      "programCode": "FM4U000001070",
+      "aliases": ["오늘아침", "윤상"]
+    },
+    {
+      "id": "noon-hope-song",
+      "name": "정오의 희망곡",
+      "programCode": "FM4U000001226",
+      "aliases": ["정오의 희망곡 김신영입니다"]
+    }
+  ]
+}
