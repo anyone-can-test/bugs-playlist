@@ -4,7 +4,8 @@
  * 설치: npm install && npx playwright install chromium
  * 빈 앨범: npm start -- "출근길 음악"
  * 한 날짜 선곡: npm start -- --date 2026-11-22
- * 날짜 범위: npm start -- --from 2026-11-20 --to 2026-11-22
+ * 날짜별 목록: npm start -- --from 2026-11-20 --to 2026-11-22
+ * 기간 단일 목록: npm start -- --from 2026-11-20 --to 2026-11-22 --playlist-title "배캠 모음"
  * 미리보기: npm start -- --date 2026-11-22 --dry-run
  *
  * 최초 실행 시 열린 브라우저에서 직접 Bugs에 로그인하세요(최대 5분).
@@ -203,6 +204,40 @@ async function addBroadcastTracks(page, broadcast, playlistTitle) {
   };
 }
 
+async function createRangePlaylist(page, broadcasts, title, { dryRun = false } = {}) {
+  const tracks = broadcasts.flatMap(broadcast =>
+    broadcast.tracks.map(track => ({ ...track, date: broadcast.date })),
+  );
+  if (dryRun) {
+    return {
+      status: 'dry-run', title,
+      from: broadcasts[0]?.date ?? null,
+      to: broadcasts.at(-1)?.date ?? null,
+      tracks: tracks.length,
+    };
+  }
+  const playlist = await createPlaylist(page, title);
+  if (playlist.status === 'exists') {
+    return { status: 'skipped-existing', title, url: playlist.url };
+  }
+  const results = [];
+  for (const track of tracks) {
+    results.push({
+      date: track.date,
+      ...(await findBugsTrack(page, { ...track, playlistTitle: title })),
+    });
+  }
+  return {
+    status: 'created', title, url: playlist.url,
+    from: broadcasts[0]?.date ?? null,
+    to: broadcasts.at(-1)?.date ?? null,
+    added: results.filter(result => result.status === 'added').length,
+    total: tracks.length,
+    notFound: results.filter(result => result.status === 'not-found')
+      .map(result => ({ date: result.date, ...result.song })),
+  };
+}
+
 async function createDailyPlaylists(page, broadcasts, { dryRun = false } = {}) {
   const summary = [];
   for (const broadcast of broadcasts) {
@@ -232,15 +267,15 @@ async function createDailyPlaylists(page, broadcasts, { dryRun = false } = {}) {
 
 function parseArgs(args) {
   const positional = [];
-  const options = { dryRun: false, date: null, from: null, to: null };
+  const options = { dryRun: false, date: null, from: null, to: null, playlistTitle: null };
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === '--dry-run') {
       options.dryRun = true;
-    } else if (arg === '--date' || arg === '--from' || arg === '--to') {
+    } else if (arg === '--date' || arg === '--from' || arg === '--to' || arg === '--playlist-title') {
       const value = args[++i];
       if (!value || value.startsWith('--')) throw new Error(arg + ' 다음에 날짜를 입력하세요.');
-      options[arg.slice(2)] = value;
+      options[arg === '--playlist-title' ? 'playlistTitle' : arg.slice(2)] = value;
     } else if (arg.startsWith('--')) {
       throw new Error('알 수 없는 옵션: ' + arg);
     } else {
@@ -260,8 +295,11 @@ async function main() {
     || positional[0].trim().length > 100)) {
     throw new Error('사용법: npm start -- "플레이리스트 제목" [--dry-run]');
   }
-  if (options.date && (options.from || options.to)) {
-    throw new Error('--date와 --from/--to는 함께 사용할 수 없습니다.');
+  if (options.date && (options.from || options.to || options.playlistTitle)) {
+    throw new Error('--date는 --from/--to/--playlist-title과 함께 사용할 수 없습니다.');
+  }
+  if (options.playlistTitle && (!options.from || !options.to)) {
+    throw new Error('--playlist-title은 --from과 --to 범위에서만 사용할 수 있습니다.');
   }
   if (dateMode && !options.date && (!options.from || !options.to)) {
     throw new Error('날짜 범위에는 --from과 --to가 모두 필요합니다.');
@@ -290,6 +328,13 @@ async function main() {
     const byDate = new Map(broadcasts.map(item => [item.date, item]));
     for (const date of dates) {
       if (!byDate.has(date)) console.log({ date, status: 'no-broadcast-found' });
+    }
+    if (options.playlistTitle && broadcasts.length === 0) {
+      throw new Error('기간 내 방송 선곡을 찾지 못했습니다.');
+    }
+    if (options.playlistTitle) {
+      console.log(await createRangePlaylist(page, broadcasts, options.playlistTitle, { dryRun: options.dryRun }));
+      return;
     }
     if (options.dryRun) {
       console.log(await createDailyPlaylists(page, broadcasts, { dryRun: true }));
